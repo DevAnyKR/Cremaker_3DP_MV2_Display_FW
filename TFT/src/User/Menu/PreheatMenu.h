@@ -1,18 +1,16 @@
-#ifndef _PREHEATMENU_H_
-#define _PREHEATMENU_H_
+#ifndef _PREHEAT_MENU_H_
+#define _PREHEAT_MENU_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "Configuration.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include "Settings.h"
 
-typedef enum
-{
-  BOTH = 0,
-  BED_PREHEAT = 1,
-  NOZZLE0_PREHEAT = 2,
-}TOOLPREHEAT;
+// called by menuMeshValid()
+void refreshPreheatIcon(PREHEAT_STORE * preheatStore, uint8_t index, bool redrawIcon);
 
 void menuPreheat(void);
 

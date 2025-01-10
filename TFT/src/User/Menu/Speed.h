@@ -5,16 +5,15 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "variants.h"  // for TFT70_V3_0
 
-void setSpeedItemIndex(uint8_t index);
+#ifdef TFT70_V3_0
+  #include <stdint.h>
+
+  void setSpeedItemIndex(uint8_t index);
+#endif
+
 void menuSpeed(void);
-typedef struct
-{
-  uint8_t cur;
-  uint8_t set;
-} LASTSPEED;
 
 #ifdef __cplusplus
 }

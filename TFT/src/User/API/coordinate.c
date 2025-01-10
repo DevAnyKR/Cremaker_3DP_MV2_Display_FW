@@ -1,26 +1,26 @@
 #include "coordinate.h"
-#include "string.h"
 #include "includes.h"
 
-const char axis_id[TOTAL_AXIS] = {'X', 'Y', 'Z', 'E'};
-
 static COORDINATE targetPosition = {{0.0f, 0.0f, 0.0f, 0.0f}, 3000};
+static COORDINATE curPosition    = {{0.0f, 0.0f, 0.0f, 0.0f}, 3000};
 
-static COORDINATE curPosition = {{0.0f, 0.0f, 0.0f, 0.0f}, 3000};
+const char axis_id[TOTAL_AXIS] = {'X', 'Y', 'Z', 'E'};
+E_AXIS_BACKUP eAxisBackup      = {0, 0, false, false};
 
 /**
  * Obtained from "M114 E" instead of "M114", Because the coordinates of "M114" are not real-time coordinates.
- * It may be replaced by "M114 R".
+ * It may be replaced by "M114 R"
  */
 static float extruderPostion = 0.0f;
 
-//
 static bool relative_mode = false;
 static bool relative_e = false;
 // false means current position is unknown
 // false after M18/M84 disable stepper or power up, true after G28
 static bool position_known = false;
-static bool coordinateQueryWait = false;
+
+static uint8_t coordUpdateSeconds = 0;
+static bool coordSendingWaiting = false;
 
 bool coorGetRelative(void)
 {
@@ -52,28 +52,21 @@ void coordinateSetKnown(bool known)
   position_known = known;
 }
 
-void coordinateSetAxisTarget(AXIS axis,float position)
-{
-  bool r = (axis == E_AXIS) ? relative_e || relative_mode : relative_mode;
-
-  if(r==false)
-  {
-    targetPosition.axis[axis] = position;
-  }
-  else
-  {
-    targetPosition.axis[axis] += position;
-  }
-}
-
-void coordinateSetFeedRate(uint32_t feedrate)
-{
-  targetPosition.feedrate = feedrate;
-}
-
 float coordinateGetAxisTarget(AXIS axis)
 {
   return targetPosition.axis[axis];
+}
+
+void coordinateSetAxisTarget(AXIS axis, float position)
+{
+  if ((axis == E_AXIS) ? relative_e : relative_mode)
+  {
+    targetPosition.axis[axis] += position;
+  }
+  else
+  {
+    targetPosition.axis[axis] = position;
+  }
 }
 
 uint32_t coordinateGetFeedRate(void)
@@ -81,14 +74,14 @@ uint32_t coordinateGetFeedRate(void)
   return targetPosition.feedrate;
 }
 
-void coordinateGetAll(COORDINATE *tmp)
+void coordinateSetFeedRate(uint32_t feedrate)
 {
-  memcpy(tmp, &targetPosition, sizeof(targetPosition));
+  targetPosition.feedrate = feedrate;
 }
 
-void coordinateSetExtruderActualSteps(float steps)
+void coordinateGetAll(COORDINATE * tmp)
 {
-  curPosition.axis[E_AXIS] = extruderPostion = steps / getParameter(P_STEPS_PER_MM, E_AXIS);
+  memcpy(tmp, &targetPosition, sizeof(targetPosition));
 }
 
 float coordinateGetExtruderActual(void)
@@ -96,9 +89,9 @@ float coordinateGetExtruderActual(void)
   return extruderPostion;
 }
 
-void coordinateSetAxisActual(AXIS axis, float position)
+void coordinateSetExtruderActualSteps(float steps)
 {
-  curPosition.axis[axis] = position;
+  curPosition.axis[E_AXIS] = extruderPostion = steps / getParameter(P_STEPS_PER_MM, E_AXIS);
 }
 
 float coordinateGetAxisActual(AXIS axis)
@@ -106,15 +99,63 @@ float coordinateGetAxisActual(AXIS axis)
   return curPosition.axis[axis];
 }
 
-void coordinateQuerySetWait(bool wait)
+void coordinateSetAxisActual(AXIS axis, float position)
 {
-  coordinateQueryWait = wait;
+  curPosition.axis[axis] = position;
 }
 
-void coordinateQuery(void)
+void coordinateGetAllActual(COORDINATE * tmp)
 {
-  if (infoHost.connected == true && infoHost.wait == false && !coordinateQueryWait)
+  memcpy(tmp, &curPosition, sizeof(curPosition));
+}
+
+float coordinateGetAxis(AXIS axis)
+{
+  if (infoFile.source >= FS_ONBOARD_MEDIA)
+    return coordinateGetAxisActual(axis);
+  else
+    return coordinateGetAxisTarget(axis);
+}
+
+void coordinateQueryClearSendingWaiting(void)
+{
+  coordSendingWaiting = false;
+}
+
+/**
+ * @brief Query gantry position
+ * @param seconds: Pass 0 to query manually or disable auto report. Pass delay in seconds
+ *                 for auto query if available in marlin
+ */
+void coordinateQuery(uint8_t seconds)
+{ // following conditions ordered by importance
+  if (!coordSendingWaiting && infoHost.tx_slots != 0 && infoHost.connected && infoMachineSettings.firmwareType != FW_REPRAPFW)
   {
-    coordinateQueryWait = storeCmd("M114\n");
+    if (infoMachineSettings.autoReportPos == 1)  // if auto report is enabled
+    {
+      if (seconds == 0)  // if manual querying is requested (if query interval is 0)
+        coordSendingWaiting = storeCmd("M114\n");
+
+      if (seconds != coordUpdateSeconds)  // if query interval is changed
+      {
+        if (storeCmd("M154 S%d\n", seconds))  // turn on or off (if query interval is 0) auto report
+          coordUpdateSeconds = seconds;       // if gcode will be sent, avoid to enable auto report again on next
+      }                                       // function call if already enabled for that query interval
+    }
+    else  // if auto report is disabled
+    {
+      coordSendingWaiting = storeCmd("M114\n");
+    }
+  }
+}
+
+void coordinateQueryTurnOff(void)
+{
+  coordSendingWaiting = false;
+
+  if (infoMachineSettings.autoReportPos == 1)  // if auto report is enabled, turn it off
+  {
+    storeCmd("M154 S0\n");
+    coordUpdateSeconds = 0;
   }
 }

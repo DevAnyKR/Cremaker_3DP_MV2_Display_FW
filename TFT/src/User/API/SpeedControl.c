@@ -1,66 +1,73 @@
 #include "SpeedControl.h"
 #include "includes.h"
 
-const char *const speedCmd[SPEED_NUM] = {"M220","M221"};
+#define SPEED_REFRESH_TIME 500  // 1 second is 1000
 
-static uint16_t setPercent[SPEED_NUM]     = {100, 100};  //Speed  Flow
-static uint16_t lastSetPercent[SPEED_NUM] = {100, 100};  //Speed  Flow
-static uint16_t curPercent[SPEED_NUM]  = {100, 100};  //Speed  Flow
+static const char * const speedCmd[SPEED_NUM] = {"M220", "M221"};
 
-static bool speedQueryWait = false;
+static uint16_t setPercent[SPEED_NUM] = {100, 100};
+static uint16_t curPercent[SPEED_NUM] = {100, 100};
+static uint8_t needSetPercent = 0;
 
-static uint32_t nextSpeedTime = 0;
+static bool speedSendingWaiting = false;
 
-#define NEXT_SPEED_WAIT 500  // 1 second is 1000
-
-void speedSetCurPercent(uint8_t tool, uint16_t per)
+void speedSetPercent(const uint8_t tool, const uint16_t per)
 {
-  curPercent[tool] = per;
+  uint16_t value = NOBEYOND(SPEED_MIN, per, SPEED_MAX);
+
+  SET_BIT_VALUE(needSetPercent, tool, value != curPercent[tool]);
+  setPercent[tool] = value;
 }
 
-uint16_t speedGetCurPercent(uint8_t tool)
-{
-  return curPercent[tool];
-}
-
-void speedSetPercent(uint8_t tool, uint16_t per)
-{
-  setPercent[tool]=NOBEYOND(SPEED_MIN, per, SPEED_MAX);
-}
-
-uint16_t speedGetSetPercent(uint8_t tool)
+uint16_t speedGetSetPercent(const uint8_t tool)
 {
   return setPercent[tool];
 }
 
-void loopSpeed(void)
+void speedSetCurPercent(const uint8_t tool, const uint16_t per)
 {
+  curPercent[tool] = per;
+}
+
+uint16_t speedGetCurPercent(const uint8_t tool)
+{
+  return curPercent[tool];
+}
+
+void loopCheckSpeed(void)
+{
+  static uint32_t nextUpdateTime = 0;
+
+  if (OS_GetTimeMs() < nextUpdateTime)  // avoid rapid fire, clogging the queue
+    return;
+
+  nextUpdateTime = OS_GetTimeMs() + SPEED_REFRESH_TIME;  // extend next check time
+
   for (uint8_t i = 0; i < SPEED_NUM; i++)
   {
-    if (lastSetPercent[i] != setPercent[i]  && (OS_GetTimeMs() > nextSpeedTime))
+    if (infoSettings.ext_count == 0 && i > 0)  // don't poll M221 if there are no extruders
+      continue;
+
+    if (GET_BIT(needSetPercent, i))
     {
-      if (storeCmd("%s S%d D%d\n",speedCmd[i], setPercent[i], heatGetCurrentTool()))
-        lastSetPercent[i] = setPercent[i];
-      nextSpeedTime = OS_GetTimeMs() + NEXT_SPEED_WAIT; // avoid rapid fire, clogging the queue
+      if (storeCmd("%s S%d D%d\n", speedCmd[i], setPercent[i], heatGetToolIndex()))
+        SET_BIT_OFF(needSetPercent, i);
     }
   }
 }
 
-void speedQuerySetWait(bool wait)
+void speedQueryClearSendingWaiting(void)
 {
-  speedQueryWait = wait;
+  speedSendingWaiting = false;
 }
 
 void speedQuery(void)
-{
-  // if (infoHost.connected && !infoHost.wait && !speedQueryWait)
-  // {
-  //   speedQueryWait = storeCmd("M220\nM221 D%d\n",heatGetCurrentTool());
-    
-  // }
-
-  if (infoHost.connected && !infoHost.wait && !speedQueryWait && infoMachineSettings.firmwareType != FW_REPRAPFW)
+{ // following conditions ordered by importance
+  if (!speedSendingWaiting && infoHost.tx_slots != 0 && infoHost.connected && infoMachineSettings.firmwareType != FW_REPRAPFW)
   {
-    speedQueryWait = storeCmd("M220\nM221\n");
+    speedSendingWaiting = storeCmd("M220\n");
+
+    if (infoSettings.ext_count > 0)
+      speedSendingWaiting |= storeCmd("M221\n");  // speedSendingWaiting set to "true" if at least one command will be sent
   }
 }

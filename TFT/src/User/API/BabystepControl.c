@@ -1,94 +1,65 @@
 #include "BabystepControl.h"
 #include "includes.h"
 
+#define BABYSTEP_CMD     "M290 Z%.2f\n"
+#define BABYSTEP_CMD_SMW "G43.2 Z%.2f\n"
+
 static float babystep_value = BABYSTEP_DEFAULT_VALUE;
 
-// Reset only babystep value to default value
-float babystepReset(void)
+// set current babystep value
+void babystepSetValue(float value)
 {
-  babystep_value = BABYSTEP_DEFAULT_VALUE;
-
-  return babystep_value;
+  babystep_value = value;
 }
 
-// Get current babystep value
+// get current babystep value
 float babystepGetValue(void)
 {
   return babystep_value;
 }
 
-// Reset babystep value to default value
+// reset babystep value to default value
 float babystepResetValue(void)
 {
-  if (babystep_value == BABYSTEP_DEFAULT_VALUE)  // if already default value, nothing to do
-    return babystep_value;
-
-  int step_count;
-  float last_unit;
-  float processed_baby_step = 0.0f;
-  int8_t neg = 1;
-
-  if (babystep_value < 0.0f)
-    neg = -1;
-
-  step_count = (babystep_value * neg) / BABYSTEP_MAX_STEP;
-  for (; step_count > 0; step_count--)
+  if (babystep_value != BABYSTEP_DEFAULT_VALUE)  // if already default value, nothing to do
   {
-    mustStoreCmd("M290 Z%.2f\n", -(BABYSTEP_MAX_STEP * neg));
-    processed_baby_step += BABYSTEP_MAX_STEP;
-  }
+    char * babyStepCmd = (infoMachineSettings.firmwareType == FW_SMOOTHIEWARE) ? BABYSTEP_CMD_SMW : BABYSTEP_CMD;
+    uint32_t step_count;
+    float last_unit;
+    int8_t direction = 1;
 
-  last_unit = (babystep_value * neg) - processed_baby_step;
-  if (last_unit > 0.0f)
-  {
-    mustStoreCmd("M290 Z%.2f\n", -(last_unit * neg));
-    processed_baby_step += last_unit;
-  }
+    if (babystep_value > BABYSTEP_DEFAULT_VALUE)
+      direction = -1;
 
-  babystep_value -= (processed_baby_step * neg);
+    step_count = ((BABYSTEP_DEFAULT_VALUE - babystep_value) * direction) / BABYSTEP_MAX_STEP;
 
-  return babystep_value;
-}
+    for (; step_count > 0; step_count--)
+    {
+      mustStoreCmd(babyStepCmd, BABYSTEP_MAX_STEP * direction);
+    }
 
-// Decrease babystep value
-float babystepDecreaseValue(float unit)
-{
-  if (babystep_value > BABYSTEP_MIN_VALUE)
-  {
-    float diff = babystep_value - BABYSTEP_MIN_VALUE;
+    last_unit = (BABYSTEP_DEFAULT_VALUE - babystep_value) - (BABYSTEP_MAX_STEP * step_count * direction);
 
-    unit = (diff > unit) ? unit : diff;
-    mustStoreCmd("M290 Z-%.2f\n", unit);
-    babystep_value -= unit;
+    if (last_unit != 0.0f)
+      mustStoreCmd(babyStepCmd, last_unit);
+
+    babystep_value = BABYSTEP_DEFAULT_VALUE;
   }
 
   return babystep_value;
 }
 
-// Increase babystep value
-float babystepIncreaseValue(float unit)
+// update babystep value
+float babystepUpdateValue(float unit)
 {
-  if (babystep_value < BABYSTEP_MAX_VALUE)
-  {
-    float diff = BABYSTEP_MAX_VALUE - babystep_value;
+  unit = NOBEYOND(BABYSTEP_MIN_VALUE, babystep_value + unit, BABYSTEP_MAX_VALUE) - babystep_value;
 
-    unit = (diff > unit) ? unit : diff;
-    mustStoreCmd("M290 Z%.2f\n", unit);
+  if (unit != 0)
+  {
     babystep_value += unit;
+
+    mustStoreCmd((infoMachineSettings.firmwareType == FW_SMOOTHIEWARE) ? BABYSTEP_CMD_SMW : BABYSTEP_CMD, unit);
   }
-
-  return babystep_value;
-}
-
-// Update babystep value by encoder
-float babystepUpdateValueByEncoder(float unit, int8_t direction)
-{
-  float overall_unit = (direction > 0) ? (direction * unit) : (-direction * unit);  // always positive unit
-
-  if (direction < 0)  // if negative encoder value, decrease the value. Otherwise increase the value
-    babystepDecreaseValue(overall_unit);
-  else
-    babystepIncreaseValue(overall_unit);
 
   return babystep_value;
 }

@@ -1,276 +1,372 @@
 #include "StatusScreen.h"
+#include "includes.h"
+
 #ifdef TFT70_V3_0
-#define KEY_SPEEDMENU         KEY_ICON_3
-#define KEY_FLOWMENU          (KEY_SPEEDMENU + 1)
-#define KEY_MAINMENU          (KEY_FLOWMENU + 1)
-#define SET_SPEEDMENUINDEX(x) setSpeedItemIndex(x)
+  #define KEY_SPEEDMENU         KEY_ICON_3
+  #define KEY_FLOWMENU          (KEY_SPEEDMENU + 1)
+  #define KEY_MAINMENU          (KEY_FLOWMENU + 1)
+  #define SET_SPEEDMENUINDEX(x) setSpeedItemIndex(x)
 #else
-#define KEY_SPEEDMENU         KEY_ICON_3
-#define KEY_MAINMENU          (KEY_SPEEDMENU + 1)
-#define SET_SPEEDMENUINDEX(x)
+  #define KEY_SPEEDMENU         KEY_ICON_3
+  #define KEY_MAINMENU          (KEY_SPEEDMENU + 1)
+  #define SET_SPEEDMENUINDEX(x)
 #endif
 
-const MENUITEMS StatusItems = {
+#ifdef PORTRAIT_MODE
+  #define XYZ_STATUS "X:%.2f Y:%.2f Z:%.2f"
+#else
+  #define XYZ_STATUS "   X: %.2f   Y: %.2f   Z: %.2f   "
+#endif
+
+#define TOOL_TOGGLE_TIME 2000  // 1 seconds is 1000
+
+// text position rectangles for Live icons
+static const GUI_POINT ss_title_point   = {SS_ICON_WIDTH - BYTE_WIDTH / 2, SS_ICON_NAME_Y0};
+static const GUI_POINT ss_val_point     = {SS_ICON_WIDTH / 2, SS_ICON_VAL_Y0};
+#ifdef TFT70_V3_0
+  static const GUI_POINT ss_val_point_2 = {SS_ICON_WIDTH / 2, SS_ICON_VAL_Y0_2};
+#endif
+
+// info box msg area
+#ifdef PORTRAIT_MODE
+  const  GUI_RECT msgRect = {START_X + 0.5 * ICON_WIDTH + 0 * SPACE_X + 2, ICON_START_Y + 0 * ICON_HEIGHT + 0 * SPACE_Y + STATUS_MSG_BODY_YOFFSET,
+                             START_X + 2.5 * ICON_WIDTH + 1 * SPACE_X - 2, ICON_START_Y + 1 * ICON_HEIGHT + 0 * SPACE_Y - STATUS_MSG_BODY_BOTTOM};
+
+  const GUI_RECT recGantry = {START_X - 3,                                SS_ICON_HEIGHT + ICON_START_Y + STATUS_GANTRY_YOFFSET,
+                              START_X + 3 + 3 * ICON_WIDTH + 2 * SPACE_X, ICON_HEIGHT + SPACE_Y + ICON_START_Y - STATUS_GANTRY_YOFFSET};
+#else
+  const  GUI_RECT msgRect = {START_X + 1 * ICON_WIDTH + 1 * SPACE_X + 2, ICON_START_Y + 1 * ICON_HEIGHT + 1 * SPACE_Y + STATUS_MSG_BODY_YOFFSET,
+                             START_X + 3 * ICON_WIDTH + 2 * SPACE_X - 2, ICON_START_Y + 2 * ICON_HEIGHT + 1 * SPACE_Y - STATUS_MSG_BODY_BOTTOM};
+
+  const GUI_RECT recGantry = {START_X,                                SS_ICON_HEIGHT + ICON_START_Y + STATUS_GANTRY_YOFFSET,
+                              START_X + 4 * ICON_WIDTH + 3 * SPACE_X, ICON_HEIGHT + SPACE_Y + ICON_START_Y - STATUS_GANTRY_YOFFSET};
+#endif
+
+static const MENUITEMS statusItems = {
   // title
-  LABEL_BACKGROUND,
-  // icon                         label
-  {{ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},
-   {ICON_BACKGROUND,             LABEL_BACKGROUND},}
+  LABEL_READY,
+  // icon                          label
+  {
+    {ICON_STATUS_NOZZLE,           LABEL_NULL},
+    {ICON_STATUS_BED,              LABEL_NULL},
+    {ICON_STATUS_FAN,              LABEL_NULL},
+    {ICON_STATUS_SPEED,            LABEL_NULL},
+    #ifdef TFT70_V3_0
+      {ICON_STATUS_FLOW,             LABEL_NULL},
+      {ICON_MAINMENU,                LABEL_MAINMENU},
+    #else
+      {ICON_MAINMENU,                LABEL_MAINMENU},
+      {ICON_NULL,                    LABEL_NULL},
+    #endif
+    {ICON_NULL,                    LABEL_NULL},
+    {ICON_PRINT,                   LABEL_PRINT},
+  }
 };
 
-#define UPDATE_TOOL_TIME 2000 // 1 seconds is 1000
-static int8_t lastConnection_status = -1;
+static const uint8_t bedIcons[2]     = {ICON_STATUS_BED, ICON_STATUS_CHAMBER};
+#ifndef TFT70_V3_0
+  static const uint8_t speedIcons[2] = {ICON_STATUS_SPEED, ICON_STATUS_FLOW};
+#endif
+static const char * const speedID[2] = SPEED_ID;
+
+static int8_t lastConnectionStatus = -1;
 static bool msgNeedRefresh = false;
-static bool isFirstWorkAfterBoot = true;
 
-#ifdef CREMAKER_CHAMBER
-  bool isChamberLED_ON = true;
-#endif
+static char msgTitle[20];
+static char msgBody[MAX_MSG_LENGTH];
 
-static char msgtitle[20];
-static char msgbody[MAX_MSG_LENGTH];
-SCROLL msgScroll;
-
-char connectMsg[] = "연결되었습니다."; //cremaker
-bool firstBoot = true; //cremaker
-
-const char *const SpeedID[2] = SPEED_ID;
-// text position rectangles for Live icons
-//icon 0
-const GUI_POINT ss_title_point         = {SSICON_WIDTH - BYTE_WIDTH/2, SSICON_NAME_Y0};
-const GUI_POINT ss_val_point           = {SSICON_WIDTH/2, SSICON_VAL_Y0};
-const GUI_RECT ss_screen_without_toast = {0, TOAST_HEIGHT, LCD_WIDTH, LCD_HEIGHT};
-
-#ifdef TFT70_V3_0
-  const GUI_POINT ss_val2_point = {SSICON_WIDTH/2, SSICON_VAL2_Y0};
-#endif
-
-const  GUI_RECT msgRect ={SS_INFOBOX_X + INFOBOX_RADIUS_PIXEL,                   SS_INFOBOX_Y + INFOBOX_H/2 + 3, 
-                          SS_INFOBOX_X + INFOBOX_W - INFOBOX_RADIUS_PIXEL, SS_INFOBOX_Y + INFOBOX_H - 2};
-
-const GUI_RECT RecGantry = {START_X,                        1*SSICON_HEIGHT+0*SPACE_Y+ICON_START_Y + STATUS_GANTRY_YOFFSET,
-                            4*ICON_WIDTH+3*SPACE_X+START_X, 1*ICON_HEIGHT+1*SPACE_Y+ICON_START_Y - STATUS_GANTRY_YOFFSET};
-
-const GUI_RECT temperatureRect = {SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP,                  SS_ICONS_Y + ICONS_PIXEL_GAP*0 + ICONS_H*0 + 2 ,
-                                  SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP + BYTE_WIDTH * 7, SS_ICONS_Y + ICONS_PIXEL_GAP*0 + ICONS_H*0 + 2 + BYTE_HEIGHT};
-
-void drawStatusScreenCM(void)
+void statusSetMsg(const uint8_t * title, const uint8_t * msg)
 {
-  setMenuType(MENU_TYPE_ICON);
-  
-  TSC_ReDrawIcon = itemDrawIconPress;  
-
-  GUI_ClearPrect(&ss_screen_without_toast);
-  //GUI_Clear(BLACK);
-
-  ICON_ReadDisplay(SS_ICONS_X,          SS_ICONS_Y,     ICON_STATUS_ICONS);
-  ICON_CustomReadDisplay(SS_MAINLOGO_X, SS_MAINLOGO_Y,  STATUS_CM_LOGO_ADDR);
-  ICON_ReadDisplay(SS_XYZICON_X,        SS_XYZICON_Y,   ICON_STATUS_XYZ);
-  ICON_ReadDisplay(SS_MAINMENU_X,       SS_MAINMENU_Y,  ICON_MAINMENU);
-  ICON_CustomReadDisplay(SS_INFOBOX_X,  SS_INFOBOX_Y,   INFOBOX_ADDR);
-  ICON_ReadDisplay(SS_PRINT_X,          SS_PRINT_Y,     ICON_PRINT);
-}
-
-void drawValuesSSCM(void)
-{
-  char tempstr[45];
-
-  GUI_ClearPrect(&temperatureRect);
-  // draw nozzle temperature
-  sprintf(tempstr, "%d/%d", heatGetCurrentTemp(currentTool), heatGetTargetTemp(currentTool));
-  GUI_DispString(SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP, SS_ICONS_Y + ICONS_PIXEL_GAP*0 + ICONS_H*0 + 2 ,(uint8_t *)tempstr);
-
-  // draw bed temperature
-  sprintf(tempstr, "%d/%d", heatGetCurrentTemp(BED), heatGetTargetTemp(BED));  
-  GUI_DispString(SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP, SS_ICONS_Y + ICONS_PIXEL_GAP*1 + ICONS_H*1 + 2 ,(uint8_t *)tempstr);
-
-  // draw fan speed
-  sprintf(tempstr, "%d%%", fanGetCurPercent(currentFan));
-  GUI_DispString(SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP, SS_ICONS_Y + ICONS_PIXEL_GAP*2 + ICONS_H*2 + 2 ,(uint8_t *)tempstr);
-
-  // draw speed
-  sprintf(tempstr, "%d%%", speedGetCurPercent(0));
-  GUI_DispString(SS_ICONS_X + ICONS_W + ICONS_PIXEL_GAP, SS_ICONS_Y + ICONS_PIXEL_GAP*3 + ICONS_H*3 + 2 ,(uint8_t *)tempstr);
-
-
-  // draw x value
-  sprintf(tempstr, "%.2f", coordinateGetAxisActual(X_AXIS));
-  GUI_DispStringRight(SS_XYZVALUE_X, SS_XYZVALUE_Y + XYZ_ICON_PIXEL_GAP*0 + XYZ_ICON_H*0 + 2 ,(uint8_t *)tempstr);
-
-  // draw y value
-  sprintf(tempstr, "%.2f", coordinateGetAxisActual(Y_AXIS));
-  GUI_DispStringRight(SS_XYZVALUE_X, SS_XYZVALUE_Y + XYZ_ICON_PIXEL_GAP*1 + XYZ_ICON_H*1 + 2 ,(uint8_t *)tempstr);
-
-  // draw z value
-  sprintf(tempstr, "%.2f", coordinateGetAxisActual(Z_AXIS));
-  GUI_DispStringRight(SS_XYZVALUE_X, SS_XYZVALUE_Y + XYZ_ICON_PIXEL_GAP*2 + XYZ_ICON_H*2 + 2 ,(uint8_t *)tempstr);
-}
-
-void statusScreen_setMsg(const uint8_t *title, const uint8_t *msg)
-{
-  strncpy(msgtitle, (char *)title, sizeof(msgtitle));
-  strncpy(msgbody, (char *)msg, sizeof(msgbody));
+  strncpy_no_pad(msgTitle, (char *)title, sizeof(msgTitle));
+  strncpy_no_pad(msgBody, (char *)msg, sizeof(msgBody));
   msgNeedRefresh = true;
 }
 
-void statusScreen_setReady(void)
+void statusSetReady(void)
 {
-  strncpy(msgtitle, (char *)textSelect(LABEL_STATUS), sizeof(msgtitle));
+  strncpy_no_pad(msgTitle, (char *)textSelect(LABEL_STATUS), sizeof(msgTitle));
+
   if (infoHost.connected == false)
-  {
-    strncpy(msgbody, (char *)textSelect(LABEL_UNCONNECTED), sizeof(msgbody));
-  }
+    strncpy_no_pad(msgBody, (char *)textSelect(LABEL_UNCONNECTED), sizeof(msgBody));
   else
-  {
-    strncpy(msgbody, (char *)machine_type, sizeof(msgbody));
-    strcat(msgbody, " ");
-    strcat(msgbody, (char *)textSelect(LABEL_READY));
-    if(firstBoot)
-    {
-      addToast(DIALOG_TYPE_INFO, connectMsg); //cremaker
-      firstBoot = false;
-    }
-    
-  }
+    snprintf(msgBody, sizeof(msgBody), "%s %s", machine_type, (char *)textSelect(LABEL_READY));
+
   msgNeedRefresh = true;
 }
 
-void drawStatusScreenMsg(void)
+static void statusDraw(void)
+{
+  // icons and their values are updated one by one to reduce flicker/clipping
+  char tempstr[45];
+  LIVE_INFO lvIcon;
+
+  lvIcon.enabled[0] = true;
+  lvIcon.lines[0].h_align = RIGHT;
+  lvIcon.lines[0].v_align = TOP;
+  lvIcon.lines[0].pos = ss_title_point;
+  lvIcon.lines[0].font = SS_ICON_TITLE_FONT_SIZE;
+  lvIcon.lines[0].fn_color = SS_NAME_COLOR;
+  lvIcon.lines[0].text_mode = GUI_TEXTMODE_TRANS;  // default value
+
+  lvIcon.enabled[1] = true;
+  lvIcon.lines[1].h_align = CENTER;
+  lvIcon.lines[1].v_align = CENTER;
+  lvIcon.lines[1].pos = ss_val_point;
+  lvIcon.lines[1].font = SS_ICON_VAL_FONT_SIZE;
+  lvIcon.lines[1].fn_color = SS_VAL_COLOR;
+  lvIcon.lines[1].text_mode = GUI_TEXTMODE_TRANS;  // default value
+
+  #ifndef TFT70_V3_0
+    lvIcon.enabled[2] = false;
+  #else
+    lvIcon.enabled[2] = true;
+    lvIcon.lines[2].h_align = CENTER;
+    lvIcon.lines[2].v_align = CENTER;
+    lvIcon.lines[2].pos = ss_val_point_2;
+    lvIcon.lines[2].font = SS_ICON_VAL_FONT_SIZE_2;
+    lvIcon.lines[2].fn_color = SS_VAL_COLOR_2;
+    lvIcon.lines[2].text_mode = GUI_TEXTMODE_TRANS;  // default value
+  #endif
+
+  #ifdef TFT70_V3_0
+    char tempstr2[45];
+
+    // TOOL / EXT
+    lvIcon.iconIndex = ICON_STATUS_NOZZLE;
+    lvIcon.lines[0].text = (uint8_t *)heatShortID[currentTool];
+    sprintf(tempstr, "%3d℃", heatGetCurrentTemp(currentTool));
+    sprintf(tempstr2, "%3d℃", heatGetTargetTemp(currentTool));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+    lvIcon.lines[2].text = (uint8_t *)tempstr2;
+
+    showLiveInfo(0, &lvIcon, false);
+
+    // BED / CHAMBER
+    lvIcon.iconIndex = bedIcons[currentBCIndex];
+    lvIcon.lines[0].text = (uint8_t *)heatShortID[BED + currentBCIndex];
+    sprintf(tempstr, "%3d℃", heatGetCurrentTemp(BED + currentBCIndex));
+    sprintf(tempstr2, "%3d℃", heatGetTargetTemp(BED + currentBCIndex));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+    lvIcon.lines[2].text = (uint8_t *)tempstr2;
+
+    showLiveInfo(1, &lvIcon, infoSettings.chamber_en == 1);
+
+    lvIcon.enabled[2] = false;
+  #else
+    // TOOL / EXT
+    lvIcon.iconIndex = ICON_STATUS_NOZZLE;
+    lvIcon.lines[0].text = (uint8_t *)heatShortID[currentTool];
+    sprintf(tempstr, "%3d/%-3d", heatGetCurrentTemp(currentTool), heatGetTargetTemp(currentTool));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+    showLiveInfo(0, &lvIcon, false);
+
+    // BED
+    lvIcon.iconIndex = bedIcons[currentBCIndex];
+    lvIcon.lines[0].text = (uint8_t *)heatShortID[BED + currentBCIndex];
+    sprintf(tempstr, "%3d/%-3d", heatGetCurrentTemp(BED + currentBCIndex), heatGetTargetTemp(BED + currentBCIndex));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+    showLiveInfo(1, &lvIcon, infoSettings.chamber_en == 1);
+  #endif
+
+  // FAN
+  lvIcon.iconIndex = ICON_STATUS_FAN;
+  lvIcon.lines[0].text = (uint8_t *)fanID[currentFan];
+
+  if (infoSettings.fan_percentage == 1)
+    sprintf(tempstr, "%3d%%", fanGetCurPercent(currentFan));
+  else
+    sprintf(tempstr, "%3d", fanGetCurSpeed(currentFan));
+
+  lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+  showLiveInfo(2, &lvIcon, false);
+
+  #ifdef TFT70_V3_0
+    // SPEED
+    lvIcon.iconIndex = ICON_STATUS_SPEED;
+    lvIcon.lines[0].text = (uint8_t *)speedID[0];
+    sprintf(tempstr, "%3d%%", speedGetCurPercent(0));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+    showLiveInfo(3, &lvIcon, false);
+
+    // FLOW
+    lvIcon.iconIndex = ICON_STATUS_FLOW;
+    lvIcon.lines[0].text = (uint8_t *)speedID[1];
+    sprintf(tempstr, "%3d%%", speedGetCurPercent(1));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+    showLiveInfo(4, &lvIcon, false);
+  #else
+    // SPEED / FLOW
+    lvIcon.iconIndex = speedIcons[currentSpeedID];
+    lvIcon.lines[0].text = (uint8_t *)speedID[currentSpeedID];
+    sprintf(tempstr, "%3d%%", speedGetCurPercent(currentSpeedID));
+    lvIcon.lines[1].text = (uint8_t *)tempstr;
+
+    showLiveInfo(3, &lvIcon, true);
+  #endif
+
+  sprintf(tempstr, XYZ_STATUS, coordinateGetAxisActual(X_AXIS), coordinateGetAxisActual(Y_AXIS), coordinateGetAxisActual(Z_AXIS));
+
+  #ifdef PORTRAIT_MODE
+    int paddingWidth = ((recGantry.x1 - recGantry.x0) - (strlen(tempstr) * BYTE_WIDTH)) / 2;
+
+    GUI_SetColor(GANTRY_XYZ_BG_COLOR);
+    GUI_FillRect(recGantry.x0, recGantry.y0, recGantry.x0 + paddingWidth, recGantry.y1);  // left padding
+    GUI_FillRect(recGantry.x1 - paddingWidth, recGantry.y0, recGantry.x1, recGantry.y1);  // right padding
+  #endif
+
+  GUI_SetTextMode(GUI_TEXTMODE_NORMAL);
+  GUI_SetColor(GANTRY_XYZ_FONT_COLOR);
+  GUI_SetBkColor(GANTRY_XYZ_BG_COLOR);
+  GUI_DispStringInPrect(&recGantry, (uint8_t *)tempstr);
+
+  GUI_RestoreColorDefault();
+}
+
+static void statusDrawMsg(void)
 {
   GUI_SetTextMode(GUI_TEXTMODE_TRANS);
 
-  ICON_CustomReadDisplay(rect_of_keySSCM[1].x0, rect_of_keySSCM[1].y0, INFOBOX_ADDR);
-  GUI_SetColor(INFOMSG_BKCOLOR);
-  GUI_DispString(rect_of_keySSCM[1].x0 + STATUS_MSG_ICON_XOFFSET,
-                 rect_of_keySSCM[1].y0 + STATUS_MSG_ICON_YOFFSET,
-                 IconCharSelect(ICONCHAR_INFO));
+  IMAGE_ReadDisplay(rect_of_keySS[KEY_INFOBOX].x0, rect_of_keySS[KEY_INFOBOX].y0, INFOBOX_ADDR);
+  GUI_SetColor(INFOMSG_BG_COLOR);
+  GUI_DispString(rect_of_keySS[KEY_INFOBOX].x0 + STATUS_MSG_ICON_XOFFSET,
+                 rect_of_keySS[KEY_INFOBOX].y0 + STATUS_MSG_ICON_YOFFSET,
+                 IconCharSelect(CHARICON_INFO));
 
-  GUI_DispString(rect_of_keySSCM[1].x0 + BYTE_HEIGHT + STATUS_MSG_TITLE_XOFFSET,
-                 rect_of_keySSCM[1].y0 + STATUS_MSG_ICON_YOFFSET,
-                 (uint8_t *)msgtitle);
-  GUI_SetBkColor(INFOMSG_BKCOLOR);
+  GUI_DispString(rect_of_keySS[KEY_INFOBOX].x0 + BYTE_HEIGHT + STATUS_MSG_TITLE_XOFFSET,
+                 rect_of_keySS[KEY_INFOBOX].y0 + STATUS_MSG_ICON_YOFFSET,
+                 (uint8_t *)msgTitle);
+
+  GUI_SetBkColor(INFOMSG_BG_COLOR);
   GUI_FillPrect(&msgRect);
-
-  Scroll_CreatePara(&msgScroll, (uint8_t *)msgbody, &msgRect);
-
+  Scroll_CreatePara(&scrollLine, (uint8_t *)msgBody, &msgRect);
   GUI_RestoreColorDefault();
 
   msgNeedRefresh = false;
 }
 
-static inline void scrollMsg(void)
+static inline void statusScrollMsg(void)
 {
-  GUI_SetBkColor(INFOMSG_BKCOLOR);
-  GUI_SetColor(INFOMSG_COLOR);
-  Scroll_DispString(&msgScroll,CENTER);
+  GUI_SetBkColor(INFOMSG_BG_COLOR);
+  GUI_SetColor(INFOMSG_FONT_COLOR);
+  Scroll_DispString(&scrollLine, CENTER);
   GUI_RestoreColorDefault();
 }
 
-static inline void toggleTool(void)
+static inline void statusToggleTool(void)
 {
-  if (nextScreenUpdate(UPDATE_TOOL_TIME))
+  if (nextScreenUpdate(TOOL_TOGGLE_TIME))
   {
+    // increment hotend index
     if (infoSettings.hotend_count > 1)
-    {
-      currentTool = (currentTool+1) % infoSettings.hotend_count;
-    }
-    if ((infoSettings.fan_count + infoSettings.fan_ctrl_count) > 1)
-    {
-      currentFan = (currentFan + 1) % (infoSettings.fan_count + infoSettings.fan_ctrl_count);
-    }
-    currentSpeedID = (currentSpeedID + 1) % 2;
-    //drawTemperature();
-    drawValuesSSCM();
+      currentTool = (currentTool + 1) % infoSettings.hotend_count;
 
-    // gcode queries must be call after drawTemperature
-    coordinateQuery();
+    // switch bed/chamber index
+    if (infoSettings.chamber_en == 1)
+      TOGGLE_BIT(currentBCIndex, 0);
+
+    // increment fan index
+    if ((infoSettings.fan_count + infoSettings.ctrl_fan_en) > 1)
+    {
+      do
+      {
+        currentFan = (currentFan + 1) % MAX_FAN_COUNT;
+      } while (!fanIsValid(currentFan));
+    }
+
+    // switch speed/flow
+    TOGGLE_BIT(currentSpeedID, 0);
+
+    statusDraw();
+
+    // gcode queries must be call after drawStatus
+    coordinateQuery(MS_TO_SEC(TOOL_TOGGLE_TIME));
     speedQuery();
-    fanSpeedQuery();
+    ctrlFanQuery();
   }
-}
-
-void sendCMDsInStatusScreen(void)
-{
-  storeCmd("M408\n"); //get filament data
-
-  if(isFirstWorkAfterBoot)
-  {
-    storeCmd("M2105 P\n"); //auto printing
-    storeCmd("M101\n"); //get z_cali data
-
-    #ifdef CREMAKER_CHAMBER
-      storeCmd("M355 S1 P255\n"); // turn on LED
-      isChamberLED_ON = true;
-    #endif
-
-    isFirstWorkAfterBoot = false;
-  }
-
-  if (infoSettings.z_homing_protect)
-    storeCmd("M411 T\n");
-  else if (!infoSettings.z_homing_protect)
-    storeCmd("M411 F\n");
 }
 
 void menuStatus(void)
 {
   KEY_VALUES key_num = KEY_IDLE;
 
-  GUI_SetBkColor(infoSettings.bg_color);    
-  menuDrawPage(&StatusItems);
-  drawStatusScreenCM();
-  GUI_SetColor(WHITE);
-  drawValuesSSCM();
-  drawStatusScreenMsg();
-  sendCMDsInStatusScreen();  
+  GUI_SetBkColor(infoSettings.bg_color);
+  menuDrawPage(&statusItems);
+  GUI_SetColor(GANTRY_XYZ_BG_COLOR);
+  GUI_FillPrect(&recGantry);
 
-  while (infoMenu.menu[infoMenu.cur] == menuStatus)
+  statusDraw();
+  statusDrawMsg();
+
+  while (MENU_IS(menuStatus))
   {
-    if(infoHost.connected != lastConnection_status)
+    if (infoHost.connected != lastConnectionStatus)
     {
-      statusScreen_setReady();
-      lastConnection_status = infoHost.connected;
+      statusSetReady();
+      lastConnectionStatus = infoHost.connected;
     }
+
     if (msgNeedRefresh)
-    {
-      drawStatusScreenMsg();
-    }
-    scrollMsg();
+      statusDrawMsg();
+
+    statusScrollMsg();
+
     key_num = menuKeyGetValue();
+
     switch (key_num)
     {
       case KEY_ICON_0:
-        infoMenu.menu[++infoMenu.cur] = menuMain;
+        heatSetCurrentIndex(LAST_NOZZLE);  // preselect last selected nozzle for "Heat" menu
+
+        OPEN_MENU(menuHeat);
         break;
-      case KEY_ICON_2:
-        infoMenu.menu[++infoMenu.cur] = menuPrint;
-        break;
+
       case KEY_ICON_1:
-        infoMenu.menu[++infoMenu.cur] = menuNotification;
-      #ifdef CREMAKER_CHAMBER
-      case KEY_ICON_3:        // cremaker chamber
-        if(isChamberLED_ON)
-        {
-          storeCmd("M355 S0\n");
-          isChamberLED_ON = false;
-        }
-        else
-        {
-          storeCmd("M355 S1 P255\n");
-          isChamberLED_ON = true;
-        }
+        heatSetCurrentIndex(BED);  // preselect the bed for "Heat" menu
+
+        OPEN_MENU(menuHeat);
         break;
+
+      case KEY_ICON_2:
+        OPEN_MENU(menuFan);
+        break;
+
+      case KEY_SPEEDMENU:
+        SET_SPEEDMENUINDEX(0);
+
+        OPEN_MENU(menuSpeed);
+        break;
+
+      #ifdef TFT70_V3_0
+        case KEY_FLOWMENU:
+          SET_SPEEDMENUINDEX(1);
+
+          OPEN_MENU(menuSpeed);
+          break;
       #endif
+
+      case KEY_MAINMENU:
+        OPEN_MENU(menuMain);
+        break;
+
+      case KEY_ICON_7:
+        OPEN_MENU(menuPrint);
+        break;
+
+      case KEY_INFOBOX:
+        OPEN_MENU(menuNotification);
       default:
         break;
     }
-    toggleTool();
+
+    statusToggleTool();
+
     loopProcess();
   }
+
+  coordinateQueryTurnOff();  // disable position auto report, if any
 }

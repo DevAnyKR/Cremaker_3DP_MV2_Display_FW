@@ -6,7 +6,6 @@ extern "C" {
 #endif
 
 void menuConnectionSettings(void);
-void menuBaudrate(void);
 
 #ifdef __cplusplus
 }

@@ -1,20 +1,18 @@
-#ifndef _FLASHSTORE_H_
-#define _FLASHSTORE_H_
+#ifndef _FLASH_STORE_H_
+#define _FLASH_STORE_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "stdbool.h"
-#include "variants.h"
-#include "Settings.h"
+#include <stdbool.h>
 
-#define PARA_SIZE 256  // Max size of settings buffer to read/write
+#define PARA_SIZE (128 * 3)  // max size of settings buffer to read/write
 
-void readStoredPara(void);
+void readStoredPara(void);  // read settings parameter if exist, or reset settings parameter
 void storePara(void);
 bool readIsTSCExist(void);
-bool readIsRestored(void);
+bool readIsNotStored(void);
 
 #ifdef __cplusplus
 }
